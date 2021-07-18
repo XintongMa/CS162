@@ -18,32 +18,17 @@
 #include "threads/synch.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
-#include "threads/malloc.h"
 
-struct semaphore temporary;
+static struct semaphore temporary;
 static thread_func start_process NO_RETURN;
 static bool load(const char* cmdline, void (**eip)(void), void** esp);
 static int d;
-static struct wait_status *get_child_status (tid_t tid);
-
-struct wait_status *get_child_status (tid_t tid)
-{
-  struct list *list_ = &thread_current ()->children;
-  struct list_elem *e;
-  for (e = list_begin(list_); e != list_end (list_); e = list_next (e)) {
-    struct wait_status *ws = list_entry (e, struct wait_status, elem);
-    if (ws->tid == tid)
-      return ws;
-  }
-  return NULL;
-};
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
    before process_execute() returns.  Returns the new process's
    thread id, or TID_ERROR if the thread cannot be created. */
 tid_t process_execute(const char* file_name) {
-
   char* fn_copy;
   tid_t tid;
 
@@ -54,41 +39,25 @@ tid_t process_execute(const char* file_name) {
   if (fn_copy == NULL)
     return TID_ERROR;
   strlcpy(fn_copy, file_name, PGSIZE);
-  
-  char* name;
-  size_t l = strcspn(file_name, " ") + 1;
-  name = palloc_get_page(0);
-  if (name == NULL)
-    return TID_ERROR;
-  strlcpy(name, file_name, l);
-
 
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create(name, PRI_DEFAULT, start_process, fn_copy);
-  if (tid == TID_ERROR){
+  tid = thread_create(file_name, PRI_DEFAULT, start_process, fn_copy);
+  if (tid == TID_ERROR)
     palloc_free_page(fn_copy);
-    return -1;
-  }
-
-  struct wait_status *w = get_child_status(tid);
-  sema_down(&w->loaded);
-  if(w->load == false) tid = -1;
   return tid;
 }
 
 /* A thread function that loads a user process and starts it
    running. */
 static void start_process(void* file_name_) {
-
-  char* file_name = file_name_;
+  char* base = PHYS_BASE;
   char* rest =(char *) file_name_;
-  char* argv[50];
-  int temp[100] = {0};
+  char* file_name = strtok_r(rest," ",&rest);
+  char* argv[100];
+  char** temp[100];
   int i = 0;
   int argc;
-
-  /* Parse the input */
-  if(file_name_ != NULL){
+  if(file_name != NULL){
     argv[i] = strtok_r(rest," ",&rest);
     while(argv[i] != NULL){
       i = i + 1;
@@ -96,9 +65,31 @@ static void start_process(void* file_name_) {
     }
   }
   argc = i;
-  
+  for(int j = argc - 1; j >= 0; j--){
+    base = base - strlen(argv[j]) - 1;
+    memcpy(base,argv[j],strlen(argv[j]));
+    temp[j] = &base;
+  }
+  int diff = (char *) PHYS_BASE -(char *)base + (argc + 1 + 2) * 4;
+  int align = diff % 16;
+  align = 16 - align;
+  base = base - align;
+  base = base - 4;
+  char** t;
+  for(int j = argc - 1; j >= 0; j--){
+    memcpy(base, (char *)temp[j], 4);
+    base = base - 4;
+    t = base;
+  }
+  base = base - 4;
+  //base = t;
+  base = base - 4;
+ // memcpy(base, &argc, 4);
+  base = base - 4;
+  d = (char *) PHYS_BASE -(char *) base;
+
   struct intr_frame if_;
-  bool success = false;
+  bool success;
 
   /* Initialize interrupt frame and load executable. */
   memset(&if_, 0, sizeof if_);
@@ -107,43 +98,11 @@ static void start_process(void* file_name_) {
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load(file_name, &if_.eip, &if_.esp);
 
-  struct wait_status *w = thread_current ()-> ws;
-
-  sema_up(&w->loaded);
-  
-  if (!success){
-    thread_exit();
-  }
-
-  char* base = if_.esp;
-  
-  /* Set up the stack */
-  for(int j = argc - 1; j >= 0; j--){
-    base = base - strlen(argv[j]) - 1;
-    memcpy(base,argv[j],strlen(argv[j]) + 1);
-    temp[j] = (char *) PHYS_BASE - (char *)base;
-  }
-  int diff = (char *) PHYS_BASE -(char *)base + (argc + 1 + 2) * 4;
-  int align = diff % 16;
-  align = 16 - align;
-  base = base - align;
-  base = base - 4;
-  
-  for(int j = argc - 1; j >= 0; j--){
-    base = base - 4;
-    *(char **)base = (char *) PHYS_BASE - temp[j];
-  }
-  base = base - 4;
-  *(char **)base = (char *) base + 4;
-  base = base - 4;
-  memcpy(base, &argc, 4);
-  base = base - 4;
-  d = (char *) PHYS_BASE -(char *) base;
-  if_.esp -= d;
-
   /* If load failed, quit. */
   palloc_free_page(file_name);
- 
+  if (!success)
+    thread_exit();
+
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
      threads/intr-stubs.S).  Because intr_exit takes all of its
@@ -163,28 +122,9 @@ static void start_process(void* file_name_) {
 
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
-int process_wait(tid_t child_tid UNUSED) {  
-  //struct list *list_ = &thread_current ()->children;
-  //if(list_empty(list_)) return -1;
-  //if(child_tid <= 0) return -1;
-  struct wait_status *w = get_child_status(child_tid);
-  //printf("%d",thread_current()->tid);
-  int returnv = -1;
-  if(w!=NULL){
-    if(w->terminated == true){
-      returnv = w->exit_code;
-      list_remove (&w->elem);
-      free (w);
-    }
-    else{
-      sema_down(&w->dead);
-      returnv = w->exit_code;
-      list_remove (&w->elem);
-      free (w);
-  }
-  }
-  //wait_status_helper (w);
-  return returnv;
+int process_wait(tid_t child_tid UNUSED) {
+  sema_down(&temporary);
+  return 0;
 }
 
 /* Free the current process's resources. */
@@ -207,24 +147,7 @@ void process_exit(void) {
     pagedir_activate(NULL);
     pagedir_destroy(pd);
   }
-
-  /* Free all child wait_status. */
-  while (!list_empty (&cur->children))
-    {
-      struct list_elem *e = list_pop_front (&cur->children);
-      free (list_entry (e, struct wait_status, elem));
-    }
-
-  /*free all children files*/
-  while (!list_empty (&cur->filetable))
-    {
-      struct list_elem *e = list_pop_front (&cur->filetable);
-      struct open_file *of = list_entry (e, struct open_file, elem);
-      file_close (of->f);
-      free (of);
-    }  
-
-  sema_up(&cur->ws->dead);
+  sema_up(&temporary);
 }
 
 /* Sets up the CPU for running user code in the current
@@ -327,18 +250,10 @@ bool load(const char* file_name, void (**eip)(void), void** esp) {
 
   /* Open executable file. */
   file = filesys_open(file_name);
-  
   if (file == NULL) {
     printf("load: %s: open failed\n", file_name);
-    t->ws->load = false;
     goto done;
   }
-  else{
-    file_deny_write(file);
-    t->ws->exe = file;
-    t->ws->load = true;
-  }
-  
 
   /* Read and verify executable header. */
   if (file_read(file, &ehdr, sizeof ehdr) != sizeof ehdr ||
@@ -409,7 +324,7 @@ bool load(const char* file_name, void (**eip)(void), void** esp) {
 
 done:
   /* We arrive here whether the load is successful or not. */
-  //file_close(file);
+  file_close(file);
   return success;
 }
 
@@ -524,7 +439,7 @@ static bool setup_stack(void** esp) {
   if (kpage != NULL) {
     success = install_page(((uint8_t*)PHYS_BASE) - PGSIZE, kpage, true);
     if (success)
-      *esp = PHYS_BASE;
+      *esp = PHYS_BASE - 20;
     else
       palloc_free_page(kpage);
   }

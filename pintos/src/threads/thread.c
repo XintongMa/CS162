@@ -13,6 +13,8 @@
 #include "threads/vaddr.h"
 #ifdef USERPROG
 #include "userprog/process.h"
+#include "threads/malloc.h"
+#include "stdbool.h"
 #endif
 
 /* Random value for struct thread's `magic' member.
@@ -171,6 +173,29 @@ tid_t thread_create(const char* name, int priority, thread_func* function, void*
   init_thread(t, name, priority);
   tid = t->tid = allocate_tid();
 
+  /* Add the new child to parents' child list, add wait_status to child */
+  #ifdef USERPROG
+  struct wait_status *w = malloc (sizeof (struct wait_status));
+  if (!w)
+    {
+      return TID_ERROR;
+    }
+  w->tid = tid;
+  w->exit_code = -1;
+  w->terminated = false;
+  w->waited = false;
+  w->load = false;
+  w->ref_cnt = 2;
+  w->killed = false;
+  lock_init(&w->lock);
+  sema_init (&w->dead, 0);
+  sema_init (&w->loaded, 0);
+  list_push_back (&running_thread()->children, &w->elem);
+  t->ws = w;
+  t->parent = thread_current();
+  #endif
+
+
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame(t, sizeof *kf);
   kf->eip = NULL;
@@ -188,7 +213,6 @@ tid_t thread_create(const char* name, int priority, thread_func* function, void*
 
   /* Add to run queue. */
   thread_unblock(t);
-
   return tid;
 }
 
@@ -399,6 +423,11 @@ static void init_thread(struct thread* t, const char* name, int priority) {
   t->stack = (uint8_t*)t + PGSIZE;
   t->priority = priority;
   t->magic = THREAD_MAGIC;
+
+  #ifdef USERPROG
+  list_init(&t->children);
+  list_init(&t->filetable);
+  #endif
 
   old_level = intr_disable();
   list_push_back(&all_list, &t->allelem);
