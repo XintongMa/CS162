@@ -88,10 +88,21 @@ struct thread {
   char name[16];             /* Name (for debugging purposes). */
   uint8_t* stack;            /* Saved stack pointer. */
   int priority;              /* Priority. */
+  int ep;                    /* Effective Priority. */
   struct list_elem allelem;  /* List element for all threads list. */
 
   /* Shared between thread.c and synch.c. */
   struct list_elem elem; /* List element. */
+
+  int64_t start;
+  int64_t ticks; 
+  struct list_elem waitelem;
+  struct list locks;
+  bool donated;
+  int npriority;
+  fixed_point_t nice;
+  fixed_point_t recent_cpu;
+  fixed_point_t queuep;
 
 #ifdef USERPROG
   /* Owned by userprog/process.c. */
@@ -111,6 +122,9 @@ struct thread {
    Controlled by kernel command-line option "-o mlfqs". */
 extern bool thread_mlfqs;
 
+extern struct list wait_list;
+
+void ublock(void);
 void thread_init(void);
 void thread_start(void);
 

@@ -4,6 +4,7 @@
 #include <list.h>
 #include <stdbool.h>
 
+
 /* A counting semaphore. */
 struct semaphore {
   unsigned value;      /* Current value. */
@@ -20,6 +21,8 @@ void sema_self_test(void);
 struct lock {
   struct thread* holder;      /* Thread holding lock (for debugging). */
   struct semaphore semaphore; /* Binary semaphore controlling access. */
+  struct list_elem elem;
+  int ipriority;
 };
 
 void lock_init(struct lock*);
